@@ -62,15 +62,9 @@ public:
                            const std::vector<int32_t> &cdfs_sizes,
                            const std::vector<int32_t> &offsets);
 
-  /* NOTE: In the case of GMM, the type conversion from Tensor to vector is
-   * better done in C++, or it will occupy ~80% of execution time, which is
-   * why an interface for torch::Tensor cdfs is provided...
-   **/
-  // void encode_with_indexes(const std::vector<int32_t> &symbols,
-  //                          const std::vector<int32_t> &indexes,
-  //                          const torch::Tensor &cdfs,
-  //                          const std::vector<int32_t> &cdfs_sizes,
-  //                          const std::vector<int32_t> &offsets);
+  void encode_with_indexes(const std::vector<int32_t> &symbols,
+                           const std::vector<float> &scales,
+                           const int32_t max_value);
 
   py::bytes flush();
 
@@ -93,11 +87,9 @@ public:
                                 const std::vector<int32_t> &cdfs_sizes,
                                 const std::vector<int32_t> &offsets);
 
-  // py::bytes encode_with_indexes(const std::vector<int32_t> &symbols,
-  //                               const std::vector<int32_t> &indexes,
-  //                               const torch::Tensor &cdfs,
-  //                               const std::vector<int32_t> &cdfs_sizes,
-  //                               const std::vector<int32_t> &offsets);
+  py::bytes encode_with_indexes(const std::vector<int32_t> &symbols,
+                                const std::vector<float> &scales,
+                                const int32_t max_value);
 };
 
 class RansDecoder {
@@ -116,12 +108,10 @@ public:
                       const std::vector<int32_t> &cdfs_sizes,
                       const std::vector<int32_t> &offsets);
 
-  // std::vector<int32_t>
-  // decode_with_indexes(const std::string &encoded,
-  //                     const std::vector<int32_t> &indexes,
-  //                     const torch::Tensor &cdfs,
-  //                     const std::vector<int32_t> &cdfs_sizes,
-  //                     const std::vector<int32_t> &offsets);
+  std::vector<int32_t>
+  decode_with_indexes(const std::string &encoded,
+                      const std::vector<float> &scales,
+                      const int32_t max_value);
 
   void set_stream(const std::string &stream);
 
@@ -130,12 +120,6 @@ public:
                 const std::vector<std::vector<int32_t>> &cdfs,
                 const std::vector<int32_t> &cdfs_sizes,
                 const std::vector<int32_t> &offsets);
-
-  // std::vector<int32_t>
-  // decode_stream(const std::vector<int32_t> &indexes,
-  //               const torch::Tensor &cdfs,
-  //               const std::vector<int32_t> &cdfs_sizes,
-  //               const std::vector<int32_t> &offsets);
 
 private:
   Rans64State _rans;
