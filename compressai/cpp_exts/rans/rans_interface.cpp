@@ -241,6 +241,77 @@ void BufferedRansEncoder::encode_with_indexes(
   }
 }
 
+template<int K> 
+float _fast_gmm_cdf(int32_t x, const std::array<float, K> &means, const std::array<float, K> &scales, const std::array<float, K> &weights){
+  float cdf = 0.0;
+  for (int i = 0; i < K; ++i){
+    cdf += weights[i] * _fast_gaussian_cdf((x - means[i])/scales[i]);
+  }
+  return cdf;
+}
+
+template<int K>
+void BufferedRansEncoder::encode_with_indexes(
+    const std::vector<int32_t> &symbols, const std::vector<std::array<float, K>> &scales,
+    const std::vector<std::array<float, K>> &means, const std::vector<std::array<float, K>> &weights,
+    const int32_t max_value) {;
+    // encode function for gaussian mixture condtitional
+
+  // backward loop on symbols from the end;
+  for (size_t i = 0; i < symbols.size(); ++i) {
+
+    int32_t value = symbols[i];
+    //std::cout << value << " ";
+    bool bypass = false;
+
+    //float value_half = value - offset;
+ 
+    int32_t cdf_value = static_cast<uint16_t>(_fast_gmm_cdf<K>(value - offset, means[i], scales[i], weights[i]) * max_cdf_value);
+    int32_t cdf_value_next = static_cast<uint16_t>(_fast_gmm_cdf<K>(value - offset + 1, means[i], scales[i], weights[i]) * max_cdf_value);
+
+    uint16_t pmf = cdf_value_next - cdf_value;
+    if (pmf == 0) {
+      bypass = true;
+      cdf_value = max_cdf_value;
+      cdf_value_next = max_cdf_value + 1;
+    }
+
+    _syms.push_back({static_cast<uint16_t>(cdf_value),
+                     static_cast<uint16_t>(cdf_value_next - cdf_value),
+                     false});
+
+    if (bypass) {
+      uint32_t raw_val = reinterpret_cast<uint32_t&>(value);
+      /* Bypass coding mode (cdf == max_cdf_value -> sentinel flag) */
+      /* Determine the number of bypasses (in bypass_precision size) needed to
+       * encode the raw value. */
+      int32_t n_bypass = 0;
+      while ((raw_val >> (n_bypass * bypass_precision)) != 0) {
+        ++n_bypass;
+        if (n_bypass > 8) break;
+      } 
+
+      /* Encode number of bypasses */
+      int32_t val = n_bypass;
+      while (val >= max_bypass_val) {
+        _syms.push_back({max_bypass_val, max_bypass_val + 1, true});
+        val -= max_bypass_val;
+      }
+      _syms.push_back(
+          {static_cast<uint16_t>(val), static_cast<uint16_t>(val + 1), true});
+
+      /* Encode raw value */
+      for (int32_t j = 0; j < n_bypass; ++j) {
+        const int32_t val =
+            (raw_val >> (j * bypass_precision)) & max_bypass_val;
+        _syms.push_back(
+            {static_cast<uint16_t>(val), static_cast<uint16_t>(val + 1), true});
+      }
+    }
+  }
+}
+
+
 py::bytes BufferedRansEncoder::flush() {
   Rans64State rans;
   Rans64EncInit(&rans);
@@ -436,6 +507,80 @@ RansDecoder::decode_with_indexes(const std::string &encoded,
   return output;
 }
 
+template<int K> std::vector<int32_t>
+RansDecoder::decode_with_indexes(const std::string &encoded,
+                                 const std::vector<std::array<float,K>> &scales,
+                                 const std::vector<std::array<float,K>> &means,
+                                 const std::vector<std::array<float,K>> &weights,
+                                 const int32_t max_bs_value) {
+  std::vector<int32_t> output(scales.size());
+
+  Rans64State rans;
+  uint32_t *ptr = (uint32_t *)encoded.data();
+  assert(ptr != nullptr);
+  Rans64DecInit(&rans, &ptr);
+
+  for (int i = 0; i < static_cast<int>(scales.size()); ++i) {
+
+    const uint32_t cum_freq = Rans64DecGet(&rans, precision);
+    int32_t value;
+    if(cum_freq == max_cdf_value) {
+      Rans64DecAdvance(&rans, &ptr, max_cdf_value, 1, precision);
+            /* Bypass decoding mode */
+      int32_t val = Rans64DecGetBits(&rans, &ptr, bypass_precision);
+      int32_t n_bypass = val;
+
+      while (val == max_bypass_val) {
+        val = Rans64DecGetBits(&rans, &ptr, bypass_precision);
+        n_bypass += val;
+      }
+
+      uint32_t raw_val = 0;
+      for (int j = 0; j < n_bypass; ++j) {
+        val = Rans64DecGetBits(&rans, &ptr, bypass_precision);
+        assert(val <= max_bypass_val);
+        raw_val |= val << (j * bypass_precision);
+      }
+      value = reinterpret_cast<int32_t&>(raw_val);
+    } else {
+      //Search symbol s such that _fast_gaussian_cdf(s/scales) < <= cum_freq
+      // and _fast_gaussian_cdf((s+1)/scales) > cum_freq using binary search
+      int32_t s = -max_bs_value;
+      int32_t e = max_bs_value; //some large value
+      int32_t mid = 0;
+      int32_t mid_val_1 = 0.0;
+      int32_t mid_val_2 = 0.0;
+      while (s < e){
+        mid = s + (e - s) / 2;
+        //float mid_half = mid - offset;
+        mid_val_1 = _fast_gmm_cdf<K>(mid - offset, means[i], scales[i], weights[i]) * max_cdf_value;
+        bool check1 = mid_val_1 <= cum_freq;
+        mid_val_2 = _fast_gmm_cdf<K>(mid - offset +1, means[i], scales[i], weights[i]) * max_cdf_value;
+        bool check2 = mid_val_2 > cum_freq;
+        if(check1 && check2){
+          break;
+        } else if (check1){
+          s = mid + 1;
+        } else {
+          e = mid; 
+        }
+      }
+      int32_t mid1_int = static_cast<int32_t>(mid_val_1);
+      int32_t mid2_int = static_cast<int32_t>(mid_val_2);
+      Rans64DecAdvance(&rans, &ptr, mid1_int, mid2_int - mid1_int, precision);
+
+      value = static_cast<int32_t>(mid);
+    }
+
+    //std::cout << value << " ";
+    output[i] = value;
+  }
+  //std::cout << "Decode End";
+  //std::cout << std::endl;
+
+  return output;
+}
+
 
 void RansDecoder::set_stream(const std::string &encoded) {
   _stream = encoded;
@@ -530,6 +675,12 @@ PYBIND11_MODULE(ans, m) {
            py::overload_cast<
                const std::vector<int32_t> &, const std::vector<float> &, const int32_t>(
                &BufferedRansEncoder::encode_with_indexes))
+      .def("encode_with_indexes",
+            static_cast<void (BufferedRansEncoder::*) (
+                const std::vector<int32_t> &, const std::vector<std::array<float, 3>> &,
+                const std::vector<std::array<float, 3>> &, const std::vector<std::array<float, 3>> &,
+                const int32_t)>(
+                &BufferedRansEncoder::encode_with_indexes<3>))
       .def("flush", &BufferedRansEncoder::flush);
 
   py::class_<RansEncoder>(m, "RansEncoder")
@@ -564,5 +715,14 @@ PYBIND11_MODULE(ans, m) {
       .def("decode_with_indexes",
            py::overload_cast<const std::string &, const std::vector<float> &, const int32_t>(
                &RansDecoder::decode_with_indexes),
-           "Decode a string to a list of symbols");
+           "Decode a string to a list of symbols")
+      .def("decode_with_indexes",
+            static_cast<std::vector<int32_t> (RansDecoder::*) (
+                              const std::string &, 
+                              const std::vector<std::array<float, 3>> &,
+                              const std::vector<std::array<float, 3>> &,
+                              const std::vector<std::array<float, 3>> &,
+                              const int32_t)>(
+                &RansDecoder::decode_with_indexes<3>),
+            "Decode a string to a list of symbols");
 }
