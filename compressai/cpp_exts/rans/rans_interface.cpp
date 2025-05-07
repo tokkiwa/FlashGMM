@@ -100,7 +100,7 @@ float _fast_gaussian_cdf(float x){
 
 template<int K> 
 std::tuple<float, float> _fast_gmm_cdf(
-  int32_t x1, int32_t x2,
+  float x1, float x2,
   const std::array<float, K> &means, 
   const std::array<float, K> &scales, 
   const std::array<float, K> &weights) {
@@ -111,11 +111,11 @@ std::tuple<float, float> _fast_gmm_cdf(
     __m128 x2Simd = _mm_set1_ps(static_cast<float>(x2));
     __m256 x1x2Simd = _mm256_set_m128(x1Simd, x2Simd);
 
-    __m128 meansHalf = _mm_loadu_ps(reinterpret_cast<float*>(means));
+    __m128 meansHalf = _mm_loadu_ps(reinterpret_cast<const float*>(&means));
     __m256 meansSimd = _mm256_set_m128(meansHalf, meansHalf);
-    __m128 scalesHalf = _mm_loadu_ps(reinterpret_cast<float*>(scales));
+    __m128 scalesHalf = _mm_loadu_ps(reinterpret_cast<const float*>(&scales));
     __m256 scalesSimd = _mm256_set_m128(scalesHalf, scalesHalf);
-    __m128 weightsHalf = _mm_loadu_ps(reinterpret_cast<float*>(weights));
+    __m128 weightsHalf = _mm_loadu_ps(reinterpret_cast<const float*>(&weights));
     __m256 weightsSimd = _mm256_set_m128(weightsHalf, weightsHalf);
 
     __m256 x1x2Normalized = _mm256_div_ps(_mm256_sub_ps(x1x2Simd, meansSimd), scalesSimd);
@@ -321,6 +321,9 @@ void BufferedRansEncoder::encode_with_indexes_gmm(
       value - offset, value - offset + 1,
       means[i], scales[i], weights[i]
     );
+    if (i == 14779) {
+      std::cout <<"e "<< cdf1 << " " << cdf2 << std::endl;
+    }
 
     int32_t cdf_value = static_cast<uint16_t>(cdf1 * max_cdf_value);
     int32_t cdf_value_next = static_cast<uint16_t>(cdf2 * max_cdf_value);
@@ -416,6 +419,16 @@ RansEncoder::encode_with_indexes(const std::vector<int32_t> &symbols, const std:
 
   BufferedRansEncoder buffered_rans_enc;
   buffered_rans_enc.encode_with_indexes(symbols, scales, max_value);
+  return buffered_rans_enc.flush();
+}
+
+template<int K>
+py::bytes RansEncoder::encode_with_indexes_gmm(
+    const std::vector<int32_t> &symbols, const std::vector<std::array<float, K>> &scales,
+    const std::vector<std::array<float, K>> &means, const std::vector<std::array<float, K>> &weights,
+    const int32_t max_value) {
+  BufferedRansEncoder buffered_rans_enc;
+  buffered_rans_enc.encode_with_indexes_gmm<K>(symbols, scales, means, weights, max_value);
   return buffered_rans_enc.flush();
 }
 
@@ -614,6 +627,9 @@ RansDecoder::decode_with_indexes_gmm(const std::string &encoded,
           mid - offset, mid - offset + 1,
           means[i], scales[i], weights[i]
         );
+        if (i == 14779) {
+          std::cout << cdf1 << " " << cdf2 << std::endl;
+        }
         mid_val_1 = cdf1 * max_cdf_value;
         bool check1 = mid_val_1 <= cum_freq;
         mid_val_2 = cdf2 * max_cdf_value;
@@ -718,7 +734,7 @@ RansDecoder::decode_stream(const std::vector<int32_t> &indexes,
   return output;
 }
 
-constexpr int K = 3;
+constexpr int K = 4;
 
 PYBIND11_MODULE(ans, m) {
   m.attr("__name__") = "compressai.ans";
@@ -756,7 +772,13 @@ PYBIND11_MODULE(ans, m) {
       .def("encode_with_indexes",
            py::overload_cast<
                const std::vector<int32_t> &, const std::vector<float> &, const int32_t>(
-               &RansEncoder::encode_with_indexes));
+               &RansEncoder::encode_with_indexes))
+      .def("encode_with_indexes_gmm",
+            static_cast<py::bytes (RansEncoder::*) (
+                const std::vector<int32_t> &, const std::vector<std::array<float, K>> &,
+                const std::vector<std::array<float, K>> &, const std::vector<std::array<float, K>> &,
+                const int32_t)>(
+                &RansEncoder::encode_with_indexes_gmm<K>));
 
   py::class_<RansDecoder>(m, "RansDecoder")
       .def(py::init<>())

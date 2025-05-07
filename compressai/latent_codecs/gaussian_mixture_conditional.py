@@ -32,13 +32,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch.nn as nn
 
 from torch import Tensor
+import torch
 
 from compressai.entropy_models import GaussianMixtureConditional
 from compressai.ops import quantize_ste
 from compressai.registry import register_module
 
 from .base import LatentCodec
-
 
 class GaussianMixtureConditionalLatentCodec(LatentCodec):
     """Gaussian conditional for compressing latent ``y`` using ``ctx_params``.
@@ -85,17 +85,20 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
         **kwargs,
     ):
         super().__init__()
+        self.K = K
         self.quantizer = quantizer
         self.gaussian_mixture_conditional = gaussian_mixture_conditional if gaussian_mixture_conditional is not None else GaussianMixtureConditional(
             K=K,
             scale_table=scale_table,
         )
+        print(self.gaussian_mixture_conditional)
         self.entropy_parameters = entropy_parameters or nn.Identity()
         self.chunks = tuple(chunks)
 
     def forward(self, y: Tensor, ctx_params: Tensor) -> Dict[str, Any]:
         gaussian_params = self.entropy_parameters(ctx_params)
         scales_hat, means_hat, weights = self._chunk(gaussian_params)
+        weights = self._reshape_gmm_weight(weights)
         y_hat, y_likelihoods = self.gaussian_mixture_conditional(y, 
                                                                  scales_hat, 
                                                                  means_hat, 
@@ -106,14 +109,12 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
         return {"likelihoods": {"y": y_likelihoods}, "y_hat": y_hat}
 
     def compress(self, y: Tensor, ctx_params: Tensor) -> Dict[str, Any]:
+        print("compress called at GMM latent codec")
         gaussian_params = self.entropy_parameters(ctx_params)
         scales_hat, means_hat, weights = self._chunk(gaussian_params)
+        weights = self._reshape_gmm_weight(weights)
         #indexes = self.gaussian_conditional.build_indexes(scales_hat)
-        y_strings = self.gaussian_mixture_conditional.compress(y, scales_hat, means_hat, weights)
-        y_hat = self.gaussian_mixture_conditional.decompress(
-            y_strings, _, _, scales_hat, means_hat, weights
-            #abs_maxとzero_bitmapは何？まだ使う？
-        )
+        y_strings, y_hat = self.gaussian_mixture_conditional.compress(y, scales_hat, means_hat, weights)
         return {"strings": [y_strings], "shape": y.shape[2:4], "y_hat": y_hat}
 
     def decompress(
@@ -126,9 +127,10 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
         (y_strings,) = strings
         gaussian_params = self.entropy_parameters(ctx_params)
         scales_hat, means_hat, weights = self._chunk(gaussian_params)
+        weights = self._reshape_gmm_weight(weights)
         #indexes = self.gaussian_conditional.build_indexes(scales_hat)
         y_hat = self.gaussian_mixture_conditional.decompress(
-            y_strings, scales_hat, means_hat, weights
+            *y_strings, scales_hat, means_hat, weights
         )
         assert y_hat.shape[2:4] == shape
         return {"y_hat": y_hat}
@@ -147,3 +149,9 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
             scales, means, weights = params.chunk(3, 1)
             return scales, weights, means
         return scales, means
+    
+    def _reshape_gmm_weight(self, weight):
+        weight = torch.reshape(weight, (weight.size(0), self.K, weight.size(1) // self.K, weight.size(2), -1))
+        weight = nn.functional.softmax(weight, dim=1)
+        weight = torch.reshape(weight, (weight.size(0), weight.size(1) * weight.size(2), weight.size(3), -1))
+        return weight

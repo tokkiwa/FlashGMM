@@ -832,19 +832,22 @@ class GaussianMixtureConditional(GaussianConditional):
         scales = (
             scales.reshape(*reshape_size)[:, :, nonzero]
             .permute(1, 0, 2, 3)
-            .reshape(self.K, -1)
-        )
+            .reshape(self.K, -1).permute(1, 0)
+        ).clamp(0.11, 256)
         means = (
             means.reshape(*reshape_size)[:, :, nonzero]
             .permute(1, 0, 2, 3)
-            .reshape(self.K, -1)
+            .reshape(self.K, -1).permute(1, 0)
         )
         weights = (
             weights.reshape(*reshape_size)[:, :, nonzero]
             .permute(1, 0, 2, 3)
-            .reshape(self.K, -1)
+            .reshape(self.K, -1).permute(1, 0)
         )
         return scales, means, weights
+
+    y_q = None
+    y_p = None
 
     def compress(self, y, scales, means, weights):
         abs_max = (
@@ -858,36 +861,54 @@ class GaussianMixtureConditional(GaussianConditional):
         )
 
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
-        symbols = y_quantized[:, nonzero]
+        symbols = y_quantized[:, nonzero].reshape(-1).int()
         scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
+        print(symbols[14779], scales[14779], means[14779], weights[14779])
+        if self.y_q is None:
+            self.y_q = symbols
+        else:
+            self.y_p = symbols
 
         rv = self.entropy_coder._encoder.encode_with_indexes_gmm(
-            symbols.reshape(-1).int().tolist(),
+            symbols.tolist(),
             scales.tolist(),
             means.tolist(),
             weights.tolist(),
-            abs_max,
+            abs_max + 1,
         )
 
         return (rv, abs_max, zero_bitmap), y_quantized
 
     def decompress(self, strings, abs_max, zero_bitmap, scales, means, weights):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
+        scales_ = scales
         scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
 
-        values = self.entropy_coder._decoder.decode_with_indexes(
+        values = self.entropy_coder._decoder.decode_with_indexes_gmm(
             strings,
             scales.tolist(),
             means.tolist(),
             weights.tolist(),
-            abs_max
+            abs_max + 1
         )
 
         symbols = torch.tensor(values)
-        symbols = symbols.reshape(scales.size(0), -1, scales.size(2), scales.size(3))
+        print(symbols[14779], scales[14779], means[14779], weights[14779])
+        if self.y_q is not None:
+            for i in range(len(scales)):
+                if symbols[i] != self.y_q[i]:
+                    print(i)
+        else:
+            for i in range(len(scales)):
+                if symbols[i] != self.y_p[i]:
+                    print(i)
+
+        self.y_q = None
+
+        symbols = symbols.reshape(scales_.size(0), -1, scales_.size(2), scales_.size(3))
 
         y_hat = torch.zeros(
-            scales.size(0), zero_bitmap.size(0), scales.size(2), scales.size(3)
+            scales_.size(0), zero_bitmap.size(0), scales_.size(2), scales_.size(3)
         )
         y_hat[:, nonzero] = symbols.float()
 
