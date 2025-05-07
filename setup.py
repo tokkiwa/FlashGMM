@@ -68,7 +68,7 @@ def get_extensions():
     rans_lib_dir = cwd / "third_party/ryg_rans"
     rans_ext_dir = ext_dirs / "rans"
 
-    extra_compile_args = ["-std=c++17"]
+    extra_compile_args = ["-std=c++17", "-march=native"]
     if os.getenv("DEBUG_BUILD", None):
         extra_compile_args += ["-O0", "-g", "-UNDEBUG"]
     else:
