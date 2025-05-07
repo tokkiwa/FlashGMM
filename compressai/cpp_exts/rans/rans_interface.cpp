@@ -38,11 +38,14 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <tuple>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include <x86intrin.h>
+#include "avx_mathfun.h"
 #include "rans64.h"
 
 namespace py = pybind11;
@@ -72,8 +75,64 @@ template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
+__m256 copysign_ps(__m256 from, __m256 to) {
+    constexpr float signbit = -0.f;
+    const __m256 avx_signbit = _mm256_broadcast_ss(&signbit);
+    return _mm256_or_ps(_mm256_and_ps(avx_signbit, from), _mm256_andnot_ps(avx_signbit, to)); // (avx_signbit & from) | (~avx_signbit & to)
+}
+
+__m256 _fast_gaussian_cdf(__m256 x) {
+  const __m256 half = _mm256_set1_ps(0.5f);
+  const __m256 one = _mm256_set1_ps(1.0f);
+  const __m256 minusTwoInvPi = _mm256_set1_ps(-2.0f / M_PI);
+  
+  __m256 xSquared = _mm256_mul_ps(x, x);
+  __m256 afterExp = exp256_ps(_mm256_mul_ps(minusTwoInvPi, xSquared));
+  __m256 afterSqrt = _mm256_sqrt_ps(_mm256_sub_ps(one, afterExp));
+  __m256 afterSqrtSigned = copysign_ps(x, afterSqrt);
+
+  return _mm256_mul_ps(half, _mm256_add_ps(one, afterSqrtSigned));
+}
+
 float _fast_gaussian_cdf(float x){
-  return 0.5 * (1 + sgn(x) * std::sqrt(1 - std::exp(-2 * x * x / M_PI)));
+  return 0.5 * (1 + std::copysign(std::sqrt(1 - std::exp(-2 * x * x / M_PI)), x));
+}
+
+template<int K> 
+std::tuple<float, float> _fast_gmm_cdf(
+  int32_t x1, int32_t x2,
+  const std::array<float, K> &means, 
+  const std::array<float, K> &scales, 
+  const std::array<float, K> &weights) {
+  float cdf1 = 0.0, cdf2 = 0.0;
+
+  if constexpr (K == 4) {
+    __m128 x1Simd = _mm_set1_ps(static_cast<float>(x1));
+    __m128 x2Simd = _mm_set1_ps(static_cast<float>(x2));
+    __m256 x1x2Simd = _mm256_set_m128(x1Simd, x2Simd);
+
+    __m128 meansHalf = _mm_loadu_ps(reinterpret_cast<float*>(means));
+    __m256 meansSimd = _mm256_set_m128(meansHalf, meansHalf);
+    __m128 scalesHalf = _mm_loadu_ps(reinterpret_cast<float*>(scales));
+    __m256 scalesSimd = _mm256_set_m128(scalesHalf, scalesHalf);
+    __m128 weightsHalf = _mm_loadu_ps(reinterpret_cast<float*>(weights));
+    __m256 weightsSimd = _mm256_set_m128(weightsHalf, weightsHalf);
+
+    __m256 x1x2Normalized = _mm256_div_ps(_mm256_sub_ps(x1x2Simd, meansSimd), scalesSimd);
+    __m256 cdfs = _mm256_mul_ps(weightsSimd, _fast_gaussian_cdf(x1x2Normalized));
+
+    __m128 cdf1Simd = _mm256_extractf128_ps(cdfs, 1);
+    __m128 cdf2Simd = _mm256_castps256_ps128(cdfs);
+
+    cdf1 = (cdf1Simd[0] + cdf1Simd[2]) + (cdf1Simd[1] + cdf1Simd[3]);
+    cdf2 = (cdf2Simd[0] + cdf2Simd[2]) + (cdf2Simd[1] + cdf2Simd[3]);
+  } else {
+    for (int i = 0; i < K; ++i){
+      cdf1 += weights[i] * _fast_gaussian_cdf((x1 - means[i])/scales[i]);
+      cdf2 += weights[i] * _fast_gaussian_cdf((x2 - means[i])/scales[i]);
+    }
+  }
+  return {cdf1, cdf2};
 }
 
 /* Support only 16 bits word max */
@@ -241,17 +300,8 @@ void BufferedRansEncoder::encode_with_indexes(
   }
 }
 
-template<int K> 
-float _fast_gmm_cdf(int32_t x, const std::array<float, K> &means, const std::array<float, K> &scales, const std::array<float, K> &weights){
-  float cdf = 0.0;
-  for (int i = 0; i < K; ++i){
-    cdf += weights[i] * _fast_gaussian_cdf((x - means[i])/scales[i]);
-  }
-  return cdf;
-}
-
 template<int K>
-void BufferedRansEncoder::encode_with_indexes(
+void BufferedRansEncoder::encode_with_indexes_gmm(
     const std::vector<int32_t> &symbols, const std::vector<std::array<float, K>> &scales,
     const std::vector<std::array<float, K>> &means, const std::vector<std::array<float, K>> &weights,
     const int32_t max_value) {;
@@ -266,8 +316,14 @@ void BufferedRansEncoder::encode_with_indexes(
 
     //float value_half = value - offset;
  
-    int32_t cdf_value = static_cast<uint16_t>(_fast_gmm_cdf<K>(value - offset, means[i], scales[i], weights[i]) * max_cdf_value);
-    int32_t cdf_value_next = static_cast<uint16_t>(_fast_gmm_cdf<K>(value - offset + 1, means[i], scales[i], weights[i]) * max_cdf_value);
+    float cdf1, cdf2;
+    std::tie(cdf1, cdf2) = _fast_gmm_cdf<K>(
+      value - offset, value - offset + 1,
+      means[i], scales[i], weights[i]
+    );
+
+    int32_t cdf_value = static_cast<uint16_t>(cdf1 * max_cdf_value);
+    int32_t cdf_value_next = static_cast<uint16_t>(cdf2 * max_cdf_value);
 
     uint16_t pmf = cdf_value_next - cdf_value;
     if (pmf == 0) {
@@ -508,7 +564,7 @@ RansDecoder::decode_with_indexes(const std::string &encoded,
 }
 
 template<int K> std::vector<int32_t>
-RansDecoder::decode_with_indexes(const std::string &encoded,
+RansDecoder::decode_with_indexes_gmm(const std::string &encoded,
                                  const std::vector<std::array<float,K>> &scales,
                                  const std::vector<std::array<float,K>> &means,
                                  const std::vector<std::array<float,K>> &weights,
@@ -553,9 +609,14 @@ RansDecoder::decode_with_indexes(const std::string &encoded,
       while (s < e){
         mid = s + (e - s) / 2;
         //float mid_half = mid - offset;
-        mid_val_1 = _fast_gmm_cdf<K>(mid - offset, means[i], scales[i], weights[i]) * max_cdf_value;
+        float cdf1, cdf2;
+        std::tie(cdf1, cdf2) = _fast_gmm_cdf<K>(
+          mid - offset, mid - offset + 1,
+          means[i], scales[i], weights[i]
+        );
+        mid_val_1 = cdf1 * max_cdf_value;
         bool check1 = mid_val_1 <= cum_freq;
-        mid_val_2 = _fast_gmm_cdf<K>(mid - offset +1, means[i], scales[i], weights[i]) * max_cdf_value;
+        mid_val_2 = cdf2 * max_cdf_value;
         bool check2 = mid_val_2 > cum_freq;
         if(check1 && check2){
           break;
@@ -657,6 +718,7 @@ RansDecoder::decode_stream(const std::vector<int32_t> &indexes,
   return output;
 }
 
+constexpr int K = 3;
 
 PYBIND11_MODULE(ans, m) {
   m.attr("__name__") = "compressai.ans";
@@ -675,12 +737,12 @@ PYBIND11_MODULE(ans, m) {
            py::overload_cast<
                const std::vector<int32_t> &, const std::vector<float> &, const int32_t>(
                &BufferedRansEncoder::encode_with_indexes))
-      .def("encode_with_indexes",
+      .def("encode_with_indexes_gmm",
             static_cast<void (BufferedRansEncoder::*) (
-                const std::vector<int32_t> &, const std::vector<std::array<float, 3>> &,
-                const std::vector<std::array<float, 3>> &, const std::vector<std::array<float, 3>> &,
+                const std::vector<int32_t> &, const std::vector<std::array<float, K>> &,
+                const std::vector<std::array<float, K>> &, const std::vector<std::array<float, K>> &,
                 const int32_t)>(
-                &BufferedRansEncoder::encode_with_indexes<3>))
+                &BufferedRansEncoder::encode_with_indexes_gmm<K>))
       .def("flush", &BufferedRansEncoder::flush);
 
   py::class_<RansEncoder>(m, "RansEncoder")
@@ -716,13 +778,13 @@ PYBIND11_MODULE(ans, m) {
            py::overload_cast<const std::string &, const std::vector<float> &, const int32_t>(
                &RansDecoder::decode_with_indexes),
            "Decode a string to a list of symbols")
-      .def("decode_with_indexes",
+      .def("decode_with_indexes_gmm",
             static_cast<std::vector<int32_t> (RansDecoder::*) (
                               const std::string &, 
-                              const std::vector<std::array<float, 3>> &,
-                              const std::vector<std::array<float, 3>> &,
-                              const std::vector<std::array<float, 3>> &,
+                              const std::vector<std::array<float, K>> &,
+                              const std::vector<std::array<float, K>> &,
+                              const std::vector<std::array<float, K>> &,
                               const int32_t)>(
-                &RansDecoder::decode_with_indexes<3>),
+                &RansDecoder::decode_with_indexes_gmm<K>),
             "Decode a string to a list of symbols");
 }

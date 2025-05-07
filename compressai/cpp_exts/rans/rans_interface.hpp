@@ -67,11 +67,11 @@ public:
                            const std::vector<float> &scales,
                            const int32_t max_value);
   
-  template<int K> void encode_with_indexes(const std::vector<int32_t> &symbols,
+  template<int K> void encode_with_indexes_gmm(const std::vector<int32_t> &symbols,
                            const std::vector<std::array<float, K>> &scales,
-                            const std::vector<std::array<float, K>> &means,
-                            const std::vector<std::array<float, K>> &weights,
-                            const int32_t max_value);
+                           const std::vector<std::array<float, K>> &means,
+                           const std::vector<std::array<float, K>> &weights,
+                           const int32_t max_value);
 
   py::bytes flush();
 
@@ -97,10 +97,10 @@ public:
   py::bytes encode_with_indexes(const std::vector<int32_t> &symbols,
                                 const std::vector<float> &scales,
                                 const int32_t max_value);
-  template<int K> py::bytes encode_with_indexes(const std::vector<int32_t> &symbols,
-                                const std::vector<array<float, K>> &scales,
-                                const std::vector<array<float, K>> &means,
-                                const std::vector<array<float, K>> &weights,
+  template<int K> py::bytes encode_with_indexes_gmm(const std::vector<int32_t> &symbols,
+                                const std::vector<std::array<float, K>> &scales,
+                                const std::vector<std::array<float, K>> &means,
+                                const std::vector<std::array<float, K>> &weights,
                                 const int32_t max_value);
 };
 
@@ -126,7 +126,7 @@ public:
                       const int32_t max_value);
   
   template<int K> std::vector<int32_t>
-  decode_with_indexes(const std::string &encoded,
+  decode_with_indexes_gmm(const std::string &encoded,
                       const std::vector<std::array<float, K>> &scales,
                       const std::vector<std::array<float, K>> &means,
                       const std::vector<std::array<float, K>> &weights,
