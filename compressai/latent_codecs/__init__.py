@@ -36,6 +36,7 @@ from .gaussian_conditional import GaussianConditionalLatentCodec
 from .hyper import HyperLatentCodec
 from .hyperprior import HyperpriorLatentCodec
 from .rasterscan import RasterScanLatentCodec
+from .gaussian_mixture_conditional import GaussianMixtureConditionalLatentCodec
 
 __all__ = [
     "LatentCodec",
@@ -48,4 +49,5 @@ __all__ = [
     "HyperLatentCodec",
     "HyperpriorLatentCodec",
     "RasterScanLatentCodec",
+    "GaussianMixtureConditionalLatentCodec",
 ]

@@ -114,7 +114,7 @@ class CheckerboardLatentCodec(LatentCodec):
         entropy_parameters: nn.Module,
         context_prediction: CheckerboardMaskedConv2d,
         anchor_parity="even",
-        forward_method="twopass",
+        forward_method="onepass",
         **kwargs,
     ):
         super().__init__()

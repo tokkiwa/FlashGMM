@@ -597,6 +597,7 @@ class GaussianConditional(EntropyModel):
 
     def __init__(
         self,
+        scale_table: Optional[Union[List, Tuple]],
         *args: Any,
         scale_bound: float = 0.11,
         tail_mass: float = 1e-9,
@@ -830,89 +831,6 @@ class GaussianMixtureConditional(GaussianConditional):
             likelihood = self.likelihood_lower_bound(likelihood)
         return outputs, likelihood
 
-    @torch.no_grad()
-    def _build_cdf(self, scales, means, weights, abs_max):
-        num_latents = scales.size(1)
-        num_samples = abs_max * 2 + 1
-        TINY = 1e-10
-        device = scales.device
-
-        scales = scales.clamp_(0.11, 256)
-        means += abs_max
-
-        scales_ = scales.unsqueeze(-1).expand(-1, -1, num_samples)
-        means_ = means.unsqueeze(-1).expand(-1, -1, num_samples)
-        weights_ = weights.unsqueeze(-1).expand(-1, -1, num_samples)
-
-        samples = (
-            torch.arange(num_samples).to(device).unsqueeze(0).expand(num_latents, -1)
-        )
-
-        pmf = torch.zeros_like(samples).float()
-        for k in range(self.K):
-            pmf += (
-                0.5
-                * (
-                    1
-                    + torch.erf(
-                        (samples + 0.5 - means_[k]) / ((scales_[k] + TINY) * 2**0.5)
-                    )
-                )
-                - 0.5
-                * (
-                    1
-                    + torch.erf(
-                        (samples - 0.5 - means_[k]) / ((scales_[k] + TINY) * 2**0.5)
-                    )
-                )
-            ) * weights_[k]
-
-        cdf_limit = 2**self.entropy_coder_precision - 1
-        pmf = torch.clamp(pmf, min=1.0 / cdf_limit, max=1.0)
-        pmf_scaled = torch.round(pmf * cdf_limit)
-        pmf_sum = torch.sum(pmf_scaled, 1, keepdim=True).expand(-1, num_samples)
-
-        cdf = F.pad(
-            torch.cumsum(pmf_scaled * cdf_limit / pmf_sum, 1).int(),
-            (1, 0),
-            "constant",
-            0,
-        )
-        pmf_quantized = torch.diff(cdf, dim=1)
-
-        # We can't have zeros in PMF because rANS won't be able to encode it.
-        # Try to fix this by "stealing" probability from some unlikely symbols.
-
-        pmf_zero_count = num_samples - torch.count_nonzero(pmf_quantized, dim=1)
-
-        _, pmf_first_stealable_indices = torch.min(
-            torch.where(
-                pmf_quantized > pmf_zero_count.unsqueeze(-1).expand(-1, num_samples),
-                pmf_quantized,
-                torch.tensor(cdf_limit + 1).int(),
-            ),
-            dim=1,
-        )
-
-        pmf_real_zero_indices = (pmf_quantized == 0).nonzero().transpose(0, 1)
-        pmf_quantized[pmf_real_zero_indices[0], pmf_real_zero_indices[1]] += 1
-
-        pmf_real_steal_indices = torch.cat(
-            (
-                torch.arange(num_latents).to(device).unsqueeze(-1),
-                pmf_first_stealable_indices.unsqueeze(-1),
-            ),
-            dim=1,
-        ).transpose(0, 1)
-        pmf_quantized[
-            pmf_real_steal_indices[0], pmf_real_steal_indices[1]
-        ] -= pmf_zero_count
-
-        cdf = F.pad(torch.cumsum(pmf_quantized, 1).int(), (1, 0), "constant", 0)
-        cdf = F.pad(cdf, (0, 1), "constant", cdf_limit + 1)
-
-        return cdf
-
     def reshape_entropy_parameters(self, scales, means, weights, nonzero):
         reshape_size = (scales.size(0), self.K, scales.size(1) // self.K, -1)
 
@@ -945,54 +863,32 @@ class GaussianMixtureConditional(GaussianConditional):
         )
 
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
-        symbols = y_quantized[:, nonzero] + abs_max
-        cdf = self._build_cdf(
-            *self.reshape_entropy_parameters(scales, means, weights, nonzero), abs_max
-        )
+        symbols = y_quantized[:, nonzero]
+        scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
 
-        num_latents = cdf.size(0)
-
-        # rv = self.entropy_coder._encoder.encode_with_indexes(
-        #     symbols.reshape(-1).int().tolist(),
-        #     torch.arange(num_latents).int().tolist(),
-        #     cdf.cpu().to(torch.int32),
-        #     torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
-        #     torch.tensor(0).repeat(num_latents).int().tolist(),
-        # )
-        rv = self.entropy_coder._encoder.encode_with_indexes(
+        rv = self.entropy_coder._encoder.encode_with_indexes_gmm(
             symbols.reshape(-1).int().tolist(),
-            torch.arange(num_latents).int().tolist(),
-            cdf.cpu().tolist(),
-            torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
-            torch.tensor(0).repeat(num_latents).int().tolist(),
+            scales.tolist(),
+            means.tolist(),
+            weights.tolist(),
+            abs_max,
         )
 
         return (rv, abs_max, zero_bitmap), y_quantized
 
     def decompress(self, strings, abs_max, zero_bitmap, scales, means, weights):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
-        cdf = self._build_cdf(
-            *self.reshape_entropy_parameters(scales, means, weights, nonzero), abs_max
-        )
+        scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
 
-        num_latents = cdf.size(0)
-
-        # values = self.entropy_coder._decoder.decode_with_indexes(
-        #     strings,
-        #     torch.arange(num_latents).int().tolist(),
-        #     cdf.cpu().to(torch.int32),
-        #     torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
-        #     torch.tensor(0).repeat(num_latents).int().tolist(),
-        # )
         values = self.entropy_coder._decoder.decode_with_indexes(
             strings,
-            torch.arange(num_latents).int().tolist(),
-            cdf.cpu().tolist(),
-            torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
-            torch.tensor(0).repeat(num_latents).int().tolist(),
+            scales.tolist(),
+            means.tolist(),
+            weights.tolist(),
+            abs_max
         )
 
-        symbols = torch.tensor(values) - abs_max
+        symbols = torch.tensor(values)
         symbols = symbols.reshape(scales.size(0), -1, scales.size(2), scales.size(3))
 
         y_hat = torch.zeros(
