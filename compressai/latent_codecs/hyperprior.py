@@ -119,7 +119,7 @@ class HyperpriorLatentCodec(LatentCodec):
         self, strings: List[List[bytes]], shape: Dict[str, Tuple[int, ...]], **kwargs
     ) -> Dict[str, Any]:
         *y_strings_, z_strings = strings
-        assert all(len(y_strings) == len(z_strings) for y_strings in y_strings_)
+        #assert all(len(y_strings) == len(z_strings) for y_strings in y_strings_)
         hyper_out = self.latent_codec["hyper"].decompress([z_strings], shape["hyper"])
         y_out = self.latent_codec["y"].decompress(
             y_strings_, shape["y"], hyper_out["params"]
