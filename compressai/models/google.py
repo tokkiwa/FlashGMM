@@ -46,6 +46,7 @@ from .base import (
     get_scale_table,
 )
 from .utils import conv, deconv
+import time
 
 __all__ = [
     "CompressionModel",
@@ -281,7 +282,7 @@ class ScaleHyperprior(CompressionModel):
             nn.ReLU(inplace=True),
         )
 
-        self.gaussian_conditional = GaussianConditional(None)
+        self.gaussian_conditional = GaussianConditional()
         self.N = int(N)
         self.M = int(M)
 
@@ -413,8 +414,9 @@ class MeanScaleHyperprior(ScaleHyperprior):
 
         gaussian_params = self.h_s(z_hat)
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
-        indexes = self.gaussian_conditional.build_indexes(scales_hat)
-        y_strings = self.gaussian_conditional.compress(y, indexes, means=means_hat)
+        scales_hat = scales_hat.clamp(0.11, 256)
+        #indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        y_strings = self.gaussian_conditional.compress(y, scales_hat, means=means_hat)
         return {"strings": [y_strings, z_strings], "shape": z.size()[-2:]}
 
     def decompress(self, strings, shape):
@@ -422,10 +424,13 @@ class MeanScaleHyperprior(ScaleHyperprior):
         z_hat = self.entropy_bottleneck.decompress(strings[1], shape)
         gaussian_params = self.h_s(z_hat)
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
-        indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        scales_hat = scales_hat.clamp(0.11, 256)
+        #indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        start = time.time()
         y_hat = self.gaussian_conditional.decompress(
-            strings[0], indexes, means=means_hat
+            strings[0], scales_hat, means=means_hat
         )
+        print("decompress time:", time.time()-start)
         x_hat = self.g_s(y_hat).clamp_(0, 1)
         return {"x_hat": x_hat}
 
@@ -523,7 +528,7 @@ class JointAutoregressiveHierarchicalPriors(MeanScaleHyperprior):
             M, 2 * M, kernel_size=5, padding=2, stride=1
         )
 
-        self.gaussian_conditional = GaussianConditional(None)
+        #self.gaussian_conditional = GaussianConditional(None)
         self.N = int(N)
         self.M = int(M)
 
