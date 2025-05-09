@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms
 from PIL import Image
 from compressai.datasets import ImageFolder
@@ -511,6 +511,7 @@ def main(argv):
         num_workers=args.num_workers,
         shuffle=True,
         pin_memory=(device == "cuda"),
+        
     )
 
     test_dataloader = DataLoader(

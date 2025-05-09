@@ -42,6 +42,8 @@ from torch import Tensor
 from compressai._CXX import pmf_to_quantized_cdf as _pmf_to_quantized_cdf
 from compressai.ops import LowerBound
 
+import time
+
 
 class _EntropyCoder:
     """Proxy class to an actual entropy coder class."""
@@ -863,18 +865,24 @@ class GaussianMixtureConditional(GaussianConditional):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
         symbols = y_quantized[:, nonzero].reshape(-1).int()
         scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
-        print(symbols[14779], scales[14779], means[14779], weights[14779])
         if self.y_q is None:
             self.y_q = symbols
         else:
             self.y_p = symbols
 
+        # rv = self.entropy_coder._encoder.encode_with_indexes_gmm(
+        #     symbols.tolist(),
+        #     scales.tolist(),
+        #     means.tolist(),
+        #     weights.tolist(),
+        #     abs_max + 1,
+        # )
         rv = self.entropy_coder._encoder.encode_with_indexes_gmm(
-            symbols.tolist(),
-            scales.tolist(),
-            means.tolist(),
-            weights.tolist(),
-            abs_max + 1,
+            symbols,
+            scales, 
+            means,
+            weights,
+            abs_max + 1
         )
 
         return (rv, abs_max, zero_bitmap), y_quantized
@@ -883,25 +891,30 @@ class GaussianMixtureConditional(GaussianConditional):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
         scales_ = scales
         scales, means, weights = self.reshape_entropy_parameters(scales, means, weights, nonzero)
-
-        values = self.entropy_coder._decoder.decode_with_indexes_gmm(
+        # values = self.entropy_coder._decoder.decode_with_indexes_gmm(
+        #     strings,
+        #     scales_list,
+        #     means_list,
+        #     weights_list,
+        #     abs_max + 1
+        # )
+        symbols = self.entropy_coder._decoder.decode_with_indexes_gmm(
             strings,
-            scales.tolist(),
-            means.tolist(),
-            weights.tolist(),
+            scales,
+            means,
+            weights,
             abs_max + 1
         )
 
-        symbols = torch.tensor(values)
-        print(symbols[14779], scales[14779], means[14779], weights[14779])
-        if self.y_q is not None:
-            for i in range(len(scales)):
-                if symbols[i] != self.y_q[i]:
-                    print(i)
-        else:
-            for i in range(len(scales)):
-                if symbols[i] != self.y_p[i]:
-                    print(i)
+        #symbols = torch.tensor(values)
+        # if self.y_q is not None:
+        #     for i in range(len(scales)):
+        #         if symbols[i] != self.y_q[i]:
+        #             print(i)
+        # else:
+        #     for i in range(len(scales)):
+        #         if symbols[i] != self.y_p[i]:
+        #             print(i)
 
         self.y_q = None
 

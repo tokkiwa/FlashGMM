@@ -34,6 +34,7 @@ from pathlib import Path
 
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 from setuptools import find_packages, setup
+from torch.utils import cpp_extension
 
 cwd = Path(__file__).resolve().parent
 
@@ -74,10 +75,10 @@ def get_extensions():
     else:
         extra_compile_args += ["-O3"]
     ext_modules.append(
-        Pybind11Extension(
+        cpp_extension.CppExtension(
             name=f"{package_name}.ans",
             sources=[str(s) for s in rans_ext_dir.glob("*.cpp")],
-            language="c++",
+            #language="c++",
             include_dirs=[rans_lib_dir, rans_ext_dir],
             extra_compile_args=extra_compile_args,
         )
@@ -86,7 +87,7 @@ def get_extensions():
     # Add ops
     ops_ext_dir = ext_dirs / "ops"
     ext_modules.append(
-        Pybind11Extension(
+        cpp_extension.CppExtension(
             name=f"{package_name}._CXX",
             sources=[str(s) for s in ops_ext_dir.glob("*.cpp")],
             language="c++",
@@ -160,5 +161,6 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     ext_modules=get_extensions(),
-    cmdclass={"build_ext": build_ext},
+    #cmdclass={"build_ext": build_ext},
+    cmdclass={"build_ext": cpp_extension.BuildExtension},
 )

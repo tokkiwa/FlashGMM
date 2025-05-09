@@ -37,7 +37,7 @@ import torch
 from compressai.entropy_models import GaussianMixtureConditional
 from compressai.ops import quantize_ste
 from compressai.registry import register_module
-
+import time
 from .base import LatentCodec
 
 class GaussianMixtureConditionalLatentCodec(LatentCodec):
@@ -109,12 +109,13 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
         return {"likelihoods": {"y": y_likelihoods}, "y_hat": y_hat}
 
     def compress(self, y: Tensor, ctx_params: Tensor) -> Dict[str, Any]:
-        print("compress called at GMM latent codec")
         gaussian_params = self.entropy_parameters(ctx_params)
         scales_hat, means_hat, weights = self._chunk(gaussian_params)
         weights = self._reshape_gmm_weight(weights)
         #indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        start_time = time.time()
         y_strings, y_hat = self.gaussian_mixture_conditional.compress(y, scales_hat, means_hat, weights)
+        print(f"time taken to GMM compression: {time.time() - start_time}" )
         return {"strings": [y_strings], "shape": y.shape[2:4], "y_hat": y_hat}
 
     def decompress(
@@ -129,9 +130,11 @@ class GaussianMixtureConditionalLatentCodec(LatentCodec):
         scales_hat, means_hat, weights = self._chunk(gaussian_params)
         weights = self._reshape_gmm_weight(weights)
         #indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        start_time = time.time()
         y_hat = self.gaussian_mixture_conditional.decompress(
             *y_strings, scales_hat, means_hat, weights
         )
+        print(f"time taken to GMM decompression: {time.time() - start_time}" )
         assert y_hat.shape[2:4] == shape
         return {"y_hat": y_hat}
 
