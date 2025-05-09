@@ -6,13 +6,13 @@
  * below) provided that the following conditions are met:
  *
  * * Redistributions of source code must retain the above copyright notice,
- *   this list of conditions and the following disclaimer.
+ * this list of conditions and the following disclaimer.
  * * Redistributions in binary form must reproduce the above copyright notice,
- *   this list of conditions and the following disclaimer in the documentation
- *   and/or other materials provided with the distribution.
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
  * * Neither the name of InterDigital Communications, Inc nor the names of its
- *   contributors may be used to endorse or promote products derived from this
- *   software without specific prior written permission.
+ * contributors may be used to endorse or promote products derived from this
+ * software without specific prior written permission.
  *
  * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY
  * THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
@@ -32,10 +32,16 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-// #include <torch/extension.h>
+#include <torch/extension.h> // torch::Tensor を使用するためにインクルード
 
 #include "rans64.h"
 #include <array>
+#include <vector> // std::vector を使用するためにインクルード
+
+//前方宣言 (torch/extension.h がすでにあるので通常は不要だが、最小限の依存にする場合)
+// namespace torch {
+// class Tensor;
+// }
 
 namespace py = pybind11;
 
@@ -67,10 +73,10 @@ public:
                            const std::vector<float> &scales,
                            const int32_t max_value);
   
-  template<int K> void encode_with_indexes_gmm(const std::vector<int32_t> &symbols,
-                           const std::vector<std::array<float, K>> &scales,
-                           const std::vector<std::array<float, K>> &means,
-                           const std::vector<std::array<float, K>> &weights,
+  template<int K> void encode_with_indexes_gmm(const torch::Tensor &symbols,
+                           const torch::Tensor &scales,
+                           const torch::Tensor &means,
+                           const torch::Tensor &weights,
                            const int32_t max_value);
 
   py::bytes flush();
@@ -97,10 +103,11 @@ public:
   py::bytes encode_with_indexes(const std::vector<int32_t> &symbols,
                                 const std::vector<float> &scales,
                                 const int32_t max_value);
-  template<int K> py::bytes encode_with_indexes_gmm(const std::vector<int32_t> &symbols,
-                                const std::vector<std::array<float, K>> &scales,
-                                const std::vector<std::array<float, K>> &means,
-                                const std::vector<std::array<float, K>> &weights,
+
+  template<int K> py::bytes encode_with_indexes_gmm(const torch::Tensor &symbols,
+                                const torch::Tensor &scales,
+                                const torch::Tensor &means,
+                                const torch::Tensor &weights,
                                 const int32_t max_value);
 };
 
@@ -125,11 +132,11 @@ public:
                       const std::vector<float> &scales,
                       const int32_t max_value);
   
-  template<int K> std::vector<int32_t>
+  template<int K> torch::Tensor // 戻り値の型を変更
   decode_with_indexes_gmm(const std::string &encoded,
-                      const std::vector<std::array<float, K>> &scales,
-                      const std::vector<std::array<float, K>> &means,
-                      const std::vector<std::array<float, K>> &weights,
+                      const torch::Tensor &scales, // 引数の型を変更
+                      const torch::Tensor &means,  // 引数の型を変更
+                      const torch::Tensor &weights,// 引数の型を変更
                       const int32_t max_value);
 
   void set_stream(const std::string &stream);
@@ -143,5 +150,5 @@ public:
 private:
   Rans64State _rans;
   std::string _stream;
-  uint32_t *_ptr;
+  uint32_t *_ptr = nullptr; // Initialize _ptr to avoid potential issues
 };
