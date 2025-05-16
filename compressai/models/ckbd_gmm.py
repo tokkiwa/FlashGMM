@@ -59,7 +59,7 @@ from .base import SimpleVAECompressionModel
 from .utils import conv, deconv
 
 class Cheng2020AnchorCheckerboardGMM(SimpleVAECompressionModel):
-    def __init__(self, N=192, K = 4, **kwargs):
+    def __init__(self, N=192, K = 4, quantizer = "noise", **kwargs):
         super().__init__(**kwargs)
         self.K = K
         self.g_a = nn.Sequential(
@@ -110,7 +110,7 @@ class Cheng2020AnchorCheckerboardGMM(SimpleVAECompressionModel):
             latent_codec={
                 "y": CheckerboardLatentCodec(
                     latent_codec={
-                        "y": GaussianMixtureConditionalLatentCodec(K = self.K),
+                        "y": GaussianMixtureConditionalLatentCodec(K = self.K, quantizer=quantizer),
                     },
                     entropy_parameters=nn.Sequential(
                         nn.Conv2d(N * 12 // 3, N * 10 // 3, 1),

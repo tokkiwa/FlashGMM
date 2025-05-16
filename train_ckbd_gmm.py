@@ -522,7 +522,7 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    net = Cheng2020AnchorCheckerboardGMM(N=args.N, K = args.K)
+    net = Cheng2020AnchorCheckerboardGMM(N=args.N, K = args.K, quantizer = "weighted_mean_ste")
     #net = Cheng2020AnchorCheckerboard(N = args.N)
     net = net.to(device)
     #print(calculate_flops(net, (1, 3, 768, 512)))
