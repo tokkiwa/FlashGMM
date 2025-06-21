@@ -58,7 +58,7 @@ from compressai.registry import register_model
 from .base import SimpleVAECompressionModel
 from .utils import conv, deconv
 
-class Cheng2020AnchorCheckerboardGMM(SimpleVAECompressionModel):
+class Cheng2020AnchorCheckerboardGMMv2(SimpleVAECompressionModel):
     def __init__(self, N=192, K = 4, quantizer = "noise", **kwargs):
         super().__init__(**kwargs)
         self.K = K
@@ -115,10 +115,10 @@ class Cheng2020AnchorCheckerboardGMM(SimpleVAECompressionModel):
                     entropy_parameters=nn.Sequential(
                         nn.Conv2d(N * 12 // 3, N * 10 // 3, 1),
                         nn.LeakyReLU(inplace=True),
-                        nn.Conv2d(N * 10 // 3, N * 8 // 3, 1),
+                        nn.Conv2d(N * 10 // 3, N * 10 // 3, 1),
                         nn.LeakyReLU(inplace=True),
-                        nn.Conv2d(N * 8 // 3, 3 * self.K * N, 1),
-                    ),
+                        nn.Conv2d(N * 10 // 3, 3 * self.K * N, 1),
+                    ), #follwoing Cheng2020 paper. In Lin's multistage, input of final stage is N * 8 //3
                     context_prediction=CheckerboardMaskedConv2d(
                         N, 2 * N, kernel_size=5, stride=1, padding=2
                     ),

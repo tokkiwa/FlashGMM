@@ -18,7 +18,6 @@ from compressai.zoo import models
 from pytorch_msssim import ms_ssim
 import glob
 
-from compressai.models.ckbd_gmm import Cheng2020AnchorCheckerboardGMMv2
 from compressai.models.sensetime import Cheng2020AnchorCheckerboard
 from torch.utils.tensorboard import SummaryWriter   
 import os
@@ -363,7 +362,7 @@ def test_epoch(epoch, test_dataloader, model, criterion, type='mse'):
 
 def save_checkpoint(state, is_best, epoch, save_path, filename):
     torch.save(state, save_path + filename + "checkpoint_latest.pth.tar")
-    if epoch % 20 == 0:
+    if epoch % 10 == 0:
          torch.save(state, save_path + filename + "_" + str(epoch) +"_" +  "checkpoint.pth.tar")
     if is_best:
         torch.save(state, save_path + filename + "checkpoint_best.pth.tar")
@@ -522,7 +521,7 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    net = Cheng2020AnchorCheckerboardGMMv2(N=args.N, K = args.K, quantizer = "noise")
+    net = Cheng2020AnchorCheckerboard(N=args.N)
     #net = Cheng2020AnchorCheckerboard(N = args.N)
     net = net.to(device)
     #print(calculate_flops(net, (1, 3, 768, 512)))
