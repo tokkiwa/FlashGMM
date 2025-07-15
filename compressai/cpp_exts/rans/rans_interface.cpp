@@ -27,26 +27,27 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
 #include "rans_interface.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <torch/extension.h> // PyTorch C++拡張機能
+#include <torch/extension.h>
 
 #include <iostream>
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath> // std::sqrt, std::exp
 #include <tuple>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 #include <x86intrin.h>
-#include "avx_mathfun.h" // これらのヘッダーはローカルに存在すると仮定します
-#include "rans64.h"      // 同上
+#include "avx_mathfun.h"
+#include "rans64.h"
 
 namespace py = pybind11;
 
@@ -54,11 +55,17 @@ namespace py = pybind11;
 constexpr int precision = 16;
 constexpr int32_t max_cdf_value = 65535;
 constexpr float offset = 0.5;
-constexpr uint16_t bypass_precision = 4; /* number of bits in bypass mode */
+constexpr uint16_t bypass_precision = 4;
 constexpr uint16_t max_bypass_val = (1 << bypass_precision) - 1;
-constexpr int K_gmm_default = 4; // GMMコンポーネントのデフォルト数 (pybindで使用)
+constexpr int K_gmm_default = 4;
 
 namespace {
+
+// --- BEGIN: 移植性のための手動での数学定数定義 ---
+constexpr float C_PI_F           = 3.14159265358979323846f;
+constexpr float C_INV_SQRT_2PI_F = 0.3989422804014327f; // 1 / sqrt(2 * pi)
+// --- END: 移植性のための手動での数学定数定義 ---
+
 
 /* We only run this in debug mode as its costly... */
 void assert_cdfs(const std::vector<std::vector<int>> &cdfs,
@@ -78,16 +85,57 @@ template <typename T> int sgn(T val) {
 
 __attribute__((force_inline))
 __m256 copysign_ps(__m256 from, __m256 to) {
-    constexpr float signbit = -0.f;
-    const __m256 avx_signbit = _mm256_broadcast_ss(&signbit);
-    return _mm256_or_ps(_mm256_and_ps(avx_signbit, from), _mm256_andnot_ps(avx_signbit, to)); // (avx_signbit & from) | (~avx_signbit & to)
+    constexpr float signbit_val = -0.f;
+    const __m256 avx_signbit = _mm256_broadcast_ss(&signbit_val);
+    __m256 sign = _mm256_and_ps(avx_signbit, from);
+    __m256 value = _mm256_andnot_ps(avx_signbit, to);
+    return _mm256_or_ps(sign, value);
 }
 
+// --- BEGIN: Gaussian CDF Approximation Implementations ---
+
+// 環境変数 `APPROX_MODE` で近似アルゴリズムを切り替える
+// 0: Pólya/Watterson (default), 1: Abramowitz & Stegun, 2: Logistic
+int get_approx_mode() {
+    static int mode = -1;
+    if (mode == -1) {
+        const char* env_p = std::getenv("APPROX_MODE");
+        if (env_p) {
+            try {
+                mode = std::stoi(env_p);
+                if (mode < 0 || mode > 2) mode = 0;
+            } catch (const std::exception& e) {
+                mode = 0;
+            }
+        } else {
+            mode = 0;
+        }
+    }
+    return mode;
+}
+
+// 環境変数 `USE_SIMD` でSIMDパスの有効/無効を切り替える
+// 0: 無効, その他 (未設定含む): 有効 (デフォルト)
+bool use_simd_path() {
+    static int use_simd = -1; // -1: not initialized, 0: false, 1: true
+    if (use_simd == -1) {
+        const char* env_p = std::getenv("USE_SIMD");
+        if (env_p && std::string(env_p) == "0") {
+            use_simd = 0;
+        } else {
+            use_simd = 1; // Default to true if not set or not "0"
+        }
+    }
+    return use_simd == 1;
+}
+
+
+// Mode 0: Pólya/Watterson approximation
 __attribute__((force_inline))
-__m256 _fast_gaussian_cdf(__m256 x) {
+__m256 _polya_approx_gaussian_cdf(__m256 x) {
   const __m256 half = _mm256_set1_ps(0.5f);
   const __m256 one = _mm256_set1_ps(1.0f);
-  const __m256 minusTwoInvPi = _mm256_set1_ps(-2.0f / M_PI);
+  const __m256 minusTwoInvPi = _mm256_set1_ps(-2.0f / C_PI_F);
   
   __m256 xSquared = _mm256_mul_ps(x, x);
   __m256 afterExp = exp256_ps(_mm256_mul_ps(minusTwoInvPi, xSquared));
@@ -97,9 +145,107 @@ __m256 _fast_gaussian_cdf(__m256 x) {
   return _mm256_mul_ps(half, _mm256_add_ps(one, afterSqrtSigned));
 }
 
-float _fast_gaussian_cdf(float x){
-  return 0.5 * (1 + std::copysign(std::sqrt(1 - std::exp(-2 * x * x / M_PI)), x));
+float _polya_approx_gaussian_cdf(float x){
+  return 0.5f * (1.0f + std::copysign(std::sqrt(1.0f - std::exp(-2.0f * x * x / C_PI_F)), x));
 }
+
+// Mode 1: Abramowitz & Stegun approximation
+__attribute__((force_inline))
+__m256 _as_approx_gaussian_cdf(__m256 x) {
+    const __m256 sign_mask = _mm256_set1_ps(-0.f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 minus_half = _mm256_set1_ps(-0.5f);
+    const __m256 inv_sqrt_2pi = _mm256_set1_ps(C_INV_SQRT_2PI_F);
+
+    const __m256 p  = _mm256_set1_ps(0.2316419f);
+    const __m256 b1 = _mm256_set1_ps( 0.319381530f);
+    const __m256 b2 = _mm256_set1_ps(-0.356563782f);
+    const __m256 b3 = _mm256_set1_ps( 1.781477937f);
+    const __m256 b4 = _mm256_set1_ps(-1.821255978f);
+    const __m256 b5 = _mm256_set1_ps( 1.330274429f);
+
+    __m256 abs_x = _mm256_andnot_ps(sign_mask, x);
+
+    __m256 x_sq = _mm256_mul_ps(x, x);
+    __m256 exp_arg = _mm256_mul_ps(x_sq, minus_half);
+    __m256 z_x = _mm256_mul_ps(inv_sqrt_2pi, exp256_ps(exp_arg));
+
+    __m256 t = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(p, abs_x)));
+
+    __m256 poly = _mm256_fmadd_ps(b5, t, b4);
+    poly = _mm256_fmadd_ps(poly, t, b3);
+    poly = _mm256_fmadd_ps(poly, t, b2);
+    poly = _mm256_fmadd_ps(poly, t, b1);
+    poly = _mm256_mul_ps(poly, t);
+    
+    __m256 res_pos = _mm256_sub_ps(one, _mm256_mul_ps(z_x, poly));
+    __m256 res_neg = _mm256_sub_ps(one, res_pos);
+    
+    __m256 sign_bit = _mm256_and_ps(x, sign_mask);
+    return _mm256_blendv_ps(res_pos, res_neg, sign_bit);
+}
+
+float _as_approx_gaussian_cdf(float x) {
+    constexpr float p  = 0.2316419f;
+    constexpr float b1 =  0.319381530f;
+    constexpr float b2 = -0.356563782f;
+    constexpr float b3 =  1.781477937f;
+    constexpr float b4 = -1.821255978f;
+    constexpr float b5 =  1.330274429f;
+
+    float abs_x = std::abs(x);
+    float z_x = C_INV_SQRT_2PI_F * std::exp(-0.5f * x * x);
+    float t = 1.0f / (1.0f + p * abs_x);
+    
+    float poly = t * (b1 + t * (b2 + t * (b3 + t * (b4 + t * b5))));
+    float res = 1.0f - z_x * poly;
+
+    return (x >= 0.0f) ? res : 1.0f - res;
+}
+
+// Mode 2: Logistic function approximation
+__attribute__((force_inline))
+__m256 _logistic_approx_gaussian_cdf(__m256 x) {
+    const __m256 k = _mm256_set1_ps(1.702f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    __m256 exp_arg = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_mul_ps(k, x));
+    __m256 exp_res = exp256_ps(exp_arg);
+    return _mm256_div_ps(one, _mm256_add_ps(one, exp_res));
+}
+
+float _logistic_approx_gaussian_cdf(float x) {
+    constexpr float k = 1.702f;
+    return 1.0f / (1.0f + std::exp(-k * x));
+}
+
+// Main dispatcher function
+__attribute__((force_inline))
+__m256 _fast_gaussian_cdf(__m256 x) {
+  switch (get_approx_mode()) {
+    case 1:
+      return _as_approx_gaussian_cdf(x);
+    case 2:
+      return _logistic_approx_gaussian_cdf(x);
+    case 0:
+    default:
+      return _polya_approx_gaussian_cdf(x);
+  }
+}
+
+float _fast_gaussian_cdf(float x){
+  switch (get_approx_mode()) {
+    case 1:
+      return _as_approx_gaussian_cdf(x);
+    case 2:
+      return _logistic_approx_gaussian_cdf(x);
+    case 0:
+    default:
+      return _polya_approx_gaussian_cdf(x);
+  }
+}
+
+// --- END: Gaussian CDF Approximation Implementations ---
+
 
 template<int K> 
 std::tuple<float, float> _fast_gmm_cdf(
@@ -109,10 +255,11 @@ std::tuple<float, float> _fast_gmm_cdf(
   const std::array<float, K> &weights) {
   float cdf1 = 0.0, cdf2 = 0.0;
 
-  if constexpr (K == 4) { // Kが4の場合のAVX最適化
+  // Check if SIMD path is enabled AND applicable (K==4)
+  if (use_simd_path() && K == 4) {
     __m128 x1Simd = _mm_set1_ps(static_cast<float>(x1));
     __m128 x2Simd = _mm_set1_ps(static_cast<float>(x2));
-    __m256 x1x2Simd = _mm256_set_m128(x1Simd, x2Simd); // x2Simd が low, x1Simd が high
+    __m256 x1x2Simd = _mm256_set_m128(x1Simd, x2Simd);
 
     __m128 meansHalf = _mm_loadu_ps(reinterpret_cast<const float*>(means.data()));
     __m256 meansSimd = _mm256_set_m128(meansHalf, meansHalf);
@@ -124,11 +271,9 @@ std::tuple<float, float> _fast_gmm_cdf(
     __m256 x1x2Normalized = _mm256_div_ps(_mm256_sub_ps(x1x2Simd, meansSimd), scalesSimd);
     __m256 cdfs = _mm256_mul_ps(weightsSimd, _fast_gaussian_cdf(x1x2Normalized));
 
-    // cdfs は [c2_0, c2_1, c2_2, c2_3, c1_0, c1_1, c1_2, c1_3] のような順序 (x2がlow 128bit)
-    __m128 cdf2Simd_parts = _mm256_castps256_ps128(cdfs);      // low 128 bits
-    __m128 cdf1Simd_parts = _mm256_extractf128_ps(cdfs, 1); // high 128 bits
+    __m128 cdf2Simd_parts = _mm256_castps256_ps128(cdfs);
+    __m128 cdf1Simd_parts = _mm256_extractf128_ps(cdfs, 1);
     
-    // 水平加算 (hadd)
     cdf1Simd_parts = _mm_hadd_ps(cdf1Simd_parts, cdf1Simd_parts);
     cdf1Simd_parts = _mm_hadd_ps(cdf1Simd_parts, cdf1Simd_parts);
     cdf1 = _mm_cvtss_f32(cdf1Simd_parts);
@@ -137,7 +282,7 @@ std::tuple<float, float> _fast_gmm_cdf(
     cdf2Simd_parts = _mm_hadd_ps(cdf2Simd_parts, cdf2Simd_parts);
     cdf2 = _mm_cvtss_f32(cdf2Simd_parts);
 
-  } else { // Kが4でない場合の汎用ループ
+  } else { // Generic loop for non-SIMD path or K != 4
     for (int i = 0; i < K; ++i){
       cdf1 += weights[i] * _fast_gaussian_cdf((x1 - means[i])/scales[i]);
       cdf2 += weights[i] * _fast_gaussian_cdf((x2 - means[i])/scales[i]);
@@ -315,6 +460,7 @@ void BufferedRansEncoder::encode_with_indexes_gmm(
     const torch::Tensor &symbols, const torch::Tensor &scales,
     const torch::Tensor &means, const torch::Tensor &weights,
     const int32_t /*max_value_unused*/) { // max_value is unused with GMM CDF
+    //std::cout << "encode_with_indexes_gmm" << std::endl;
 
     // TORCH_CHECK(symbols.is_contiguous() && symbols.scalar_type() == torch::kInt32 && symbols.dim() == 1, 
     //             "symbols tensor must be a contiguous 1D int32 tensor.");
