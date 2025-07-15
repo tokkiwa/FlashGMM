@@ -878,10 +878,10 @@ class GaussianMixtureConditional(GaussianConditional):
         #     abs_max + 1,
         # )
         rv = self.entropy_coder._encoder.encode_with_indexes_gmm(
-            symbols,
-            scales, 
-            means,
-            weights,
+            symbols.to("cpu"),
+            scales.to("cpu"), 
+            means.to("cpu"),
+            weights.to("cpu"),
             abs_max + 1
         )
 
@@ -900,9 +900,9 @@ class GaussianMixtureConditional(GaussianConditional):
         # )
         symbols = self.entropy_coder._decoder.decode_with_indexes_gmm(
             strings,
-            scales,
-            means,
-            weights,
+            scales.to("cpu"),
+            means.to("cpu"),
+            weights.to("cpu"),
             abs_max + 1
         )
 
