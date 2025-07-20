@@ -1,3 +1,52 @@
+# FlashGMM
+
+<p align="center">
+  <img src="assets/flashgmm.jpg" alt="FlashGMM Logo" width="400">
+</p>
+
+FlashGMM is a fast implementation of Gaussian Mixture Model (GMM) based image compression in PyTorch. The codes are based on the [CompressAI](https://github.com/InterDigitalInc/CompressAI/) library. 
+
+# Installation
+We tested FlashGMM on Python 3.10, Pytorch 2.2.2, CUDA 12.1 and GCC 11.4.0. 
+
+First, clone the repository and install the required packages:
+
+```bash
+git clone *the repository URL*
+cd FlashGMM
+pip install -r requirements.txt
+```
+
+To compile the C++ extensions, run:
+
+```bash
+python setup.py develop
+```
+
+# Usage
+The core implementation of our FlashGMM is in `compressai/cpp_exts/rans/rans_interface.cpp` and `compressai/entropy_models/entropy_models.py`. The model code used in the experiment can be found in `compressai.models.ckbd_gmm.Cheng2020AnchorCheckerboardGMMv2`. 
+
+To train the model, you can use the provided training script. For example:
+
+```bash
+python3 train_ckbd_gmm.py --cuda -d /path/to/dataset
+    --N 192 --K 4 --lambda 0.0035 --epochs 150 --learning-rate 1e-4 --lr_epoch 120 140 145 --batch-size 16 \
+    --save_path /path/to/log --patch-size 256 256 \
+    --kodak_path /path/to/kodak
+```
+
+The pre-trained weights will be available soon. 
+
+For evaluation, run
+
+```bash
+python3 eval.py --data /path/to/kodak --cuda \
+--checkpoint /path/to/checkpoint --real\
+```
+
+The following is the original Readme of CompressAI:
+
+
 <!-- ![ID-CompressAI-logo](assets/ID-compressAI-logo-750x140.svg =750x140) -->
 <a href="url"><img src="docs/source/_static/logo.svg" align="center"></a>
 
