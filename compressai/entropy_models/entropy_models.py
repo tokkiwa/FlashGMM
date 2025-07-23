@@ -362,24 +362,20 @@ class EntropyBottleneck(EntropyModel):
         scale = self.init_scale ** (1 / (len(self.filters) + 1))
         channels = self.channels
 
-        self.matrices = nn.ParameterList()
-        self.biases = nn.ParameterList()
-        self.factors = nn.ParameterList()
-
         for i in range(len(self.filters) + 1):
             init = np.log(np.expm1(1 / scale / filters[i + 1]))
             matrix = torch.Tensor(channels, filters[i + 1], filters[i])
             matrix.data.fill_(init)
-            self.matrices.append(nn.Parameter(matrix))
+            self.register_parameter(f"_matrix{i:d}", nn.Parameter(matrix))
 
             bias = torch.Tensor(channels, filters[i + 1], 1)
             nn.init.uniform_(bias, -0.5, 0.5)
-            self.biases.append(nn.Parameter(bias))
+            self.register_parameter(f"_bias{i:d}", nn.Parameter(bias))
 
             if i < len(self.filters):
                 factor = torch.Tensor(channels, filters[i + 1], 1)
                 nn.init.zeros_(factor)
-                self.factors.append(nn.Parameter(factor))
+                self.register_parameter(f"_factor{i:d}", nn.Parameter(factor))
 
         self.quantiles = nn.Parameter(torch.Tensor(channels, 1, 3))
         init = torch.Tensor([-self.init_scale, 0, self.init_scale])
@@ -439,23 +435,24 @@ class EntropyBottleneck(EntropyModel):
         # TorchScript not yet working (nn.Mmodule indexing not supported)
         logits = inputs
         for i in range(len(self.filters) + 1):
-            matrix = self.matrices[i]
+            matrix = getattr(self, f"_matrix{i:d}")
             if stop_gradient:
                 matrix = matrix.detach()
             logits = torch.matmul(F.softplus(matrix), logits)
 
-            bias = self.biases[i]
+            bias = getattr(self, f"_bias{i:d}")
             if stop_gradient:
                 bias = bias.detach()
-            logits = logits + bias
+            logits += bias
 
             if i < len(self.filters):
-                factor = self.factors[i]
+                factor = getattr(self, f"_factor{i:d}")
                 if stop_gradient:
                     factor = factor.detach()
-                logits = logits + torch.tanh(factor) * torch.tanh(logits)
+                logits += torch.tanh(factor) * torch.tanh(logits)
         return logits
 
+    @torch.jit.unused
     def _likelihood(
         self, inputs: Tensor, stop_gradient: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -473,13 +470,10 @@ class EntropyBottleneck(EntropyModel):
 
         if not torch.jit.is_scripting():
             # x from B x C x ... to C x B x ...
-            perm = torch.cat(
-                (
-                    torch.tensor([1, 0], dtype=torch.long, device=x.device),
-                    torch.arange(2, x.ndim, dtype=torch.long, device=x.device),
-                )
-            )
-            inv_perm = perm
+            perm = np.arange(len(x.shape))
+            perm[0], perm[1] = perm[1], perm[0]
+            # Compute inverse permutation
+            inv_perm = np.arange(len(x.shape))[np.argsort(perm)]
         else:
             raise NotImplementedError()
             # TorchScript in 2D for static inference
@@ -601,6 +595,18 @@ class GaussianConditional(EntropyModel):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
+
+        if not isinstance(scale_table, (type(None), list, tuple)):
+            raise ValueError(f'Invalid type for scale_table "{type(scale_table)}"')
+
+        if isinstance(scale_table, (list, tuple)) and len(scale_table) < 1:
+            raise ValueError(f'Invalid scale_table length "{len(scale_table)}"')
+
+        if scale_table and (
+            scale_table != sorted(scale_table) or any(s <= 0 for s in scale_table)
+        ):
+            raise ValueError(f'Invalid scale_table "({scale_table})"')
+
         self.tail_mass = float(tail_mass)
         if scale_bound is None and scale_table:
             scale_bound = self.scale_table[0]
@@ -610,7 +616,7 @@ class GaussianConditional(EntropyModel):
 
         self.register_buffer(
             "scale_table",
-            torch.Tensor(),
+            self._prepare_scale_table(scale_table) if scale_table else torch.Tensor(),
         )
 
         self.register_buffer(
@@ -702,82 +708,12 @@ class GaussianConditional(EntropyModel):
             likelihood = self.likelihood_lower_bound(likelihood)
         return outputs, likelihood
 
-    def compress(self, inputs, scales, means=None):
-        """
-        Compress input tensors to char strings.
-
-        Args:
-            inputs (torch.Tensor): input tensors
-            scales (torch.IntTensor): tensor scales
-            means (torch.Tensor, optional): optional tensor means
-        """
-        symbols = self.quantize(inputs, "symbols", means)
-
-        if len(inputs.size()) < 2:
-            raise ValueError(
-                "Invalid `inputs` size. Expected a tensor with at least 2 dimensions."
-            )
-
-        strings = []
-        for i in range(symbols.size(0)):
-            rv = self.entropy_coder.encode_with_indexes(
-                symbols[i].reshape(-1).int().tolist(),
-                scales[i].reshape(-1).float().tolist(),
-                0
-            )
-            strings.append(rv)
-        return strings
-
-    def decompress(
-        self,
-        strings: str,
-        scales,
-        dtype: torch.dtype = torch.float,
-        means: torch.Tensor = None,
-    ):
-        """
-        Decompress char strings to tensors.
-
-        Args:
-            strings (str): compressed tensors
-            indexes (torch.IntTensor): tensors CDF indexes
-            dtype (torch.dtype): type of dequantized output
-            means (torch.Tensor, optional): optional tensor means
-        """
-
-        if not isinstance(strings, (tuple, list)):
-            raise ValueError("Invalid `strings` parameter type.")
-
-        if not len(strings) == scales.size(0):
-            raise ValueError("Invalid strings or scales parameters")
-
-        if len(scales.size()) < 2:
-            raise ValueError(
-                "Invalid `scales` size. Expected a tensor with at least 2 dimensions."
-            )
-
-        self._check_cdf_size()
-        if means is not None:
-            if means.size()[:2] != scales.size()[:2]:
-                raise ValueError("Invalid means or scales parameters")
-            if means.size() != scales.size():
-                for i in range(2, len(scales.size())):
-                    if means.size(i) != 1:
-                        raise ValueError("Invalid means parameters")
-
-        outputs = scales.new_empty(scales.size())
-
-        for i, s in enumerate(strings):
-            values = self.entropy_coder.decode_with_indexes(
-                s,
-                scales.reshape(-1).float().tolist(),
-                2550
-            )
-            outputs[i] = torch.tensor(
-                values, device=outputs.device, dtype=outputs.dtype
-            ).reshape(outputs[i].size())
-        outputs = self.dequantize(outputs, means, dtype)
-        return outputs
+    def build_indexes(self, scales: Tensor) -> Tensor:
+        scales = self.lower_bound_scale(scales)
+        indexes = scales.new_full(scales.size(), len(self.scale_table) - 1).int()
+        for s in self.scale_table[:-1]:
+            indexes -= (scales <= s).int()
+        return indexes
 
 
 class GaussianMixtureConditional(GaussianConditional):

@@ -122,6 +122,7 @@ class Cheng2020AnchorCheckerboardGMMv2(SimpleVAECompressionModel):
                     context_prediction=CheckerboardMaskedConv2d(
                         N, 2 * N, kernel_size=5, stride=1, padding=2
                     ),
+                    forward_method="onepass", #twopass is not supported for GMM
                 ),
                 "hyper": HyperLatentCodec(
                     entropy_bottleneck=EntropyBottleneck(N),

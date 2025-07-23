@@ -95,9 +95,21 @@ def main(argv):
     if args.checkpoint:  # load from previous checkpoint
         print("Loading", args.checkpoint)
         checkpoint = torch.load(args.checkpoint, map_location=device)
+        dictory = {}
+        #Version Compatibility: Replace keys in the state_dict
+        replacements = [
+            ("module.", ""),
+            ("matrices.", "_matrix"),
+            ("biases.", "_bias"),
+            ("factors.", "_factor")
+        ]
         for k, v in checkpoint["state_dict"].items():
-            dictory[k.replace("module.", "")] = v
+            new_key = k
+            for old, new in replacements:
+                new_key = new_key.replace(old, new)
+            dictory[new_key] = v
         net.load_state_dict(dictory)
+        net.update()
     if args.real:
         net.update()
         for img_name in img_list:
