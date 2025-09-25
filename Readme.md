@@ -1,10 +1,13 @@
 # FlashGMM
-
+<a href="https://arxiv.org/abs/2509.18815"><img alt="Static Badge" src="https://img.shields.io/badge/arXiv-2509.18815-red"></a>
 <p align="center">
-  <img src="assets/flashgmm.jpg" alt="FlashGMM Logo" width="400">
+  <img src="assets/flashgmm.jpg" alt="FlashGMM Logo" width="600">
 </p>
 
-FlashGMM is a fast implementation of Gaussian Mixture Model (GMM) based image compression in PyTorch. The codes are based on the [CompressAI](https://github.com/InterDigitalInc/CompressAI/) library. 
+FlashGMM is a fast implementation of Gaussian Mixture Model (GMM) for image compression in PyTorch. 
+The codes are based on the [CompressAI](https://github.com/InterDigitalInc/CompressAI/) library. 
+
+Our paper is available at [arxiv](https://arxiv.org/abs/2509.18815). Please feel free to contact me (octachoron(at)suou.waseda.jp) or post an issue if you have any inquires regarding to this work. 
 
 # Installation
 We tested FlashGMM on Python 3.10, Pytorch 2.2.2, CUDA 12.1 and GCC 11.4.0. 
