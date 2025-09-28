@@ -509,6 +509,49 @@ class EntropyBottleneck(EntropyModel):
 
         return outputs, likelihood
 
+    # def forward(
+    #         self, x: Tensor, training: Optional[bool] = None
+    #     ) -> Tuple[Tensor, Tensor]:
+    #         if training is None:
+    #             training = self.training
+
+    #         # --- ここからが修正箇所 ---
+    #         # NumPyではなく、PyTorchの関数でpermとinv_permを計算する
+
+    #         # perm: 0番目と1番目の次元を入れ替える
+    #         # 例: 4次元なら (0, 1, 2, 3) -> (1, 0, 2, 3)
+    #         dims = list(range(x.dim()))
+    #         dims[0], dims[1] = dims[1], dims[0]
+    #         perm = tuple(dims)
+
+    #         # inv_perm: permの逆操作を計算する
+    #         # PyTorchのargsortを使って逆順列を求める
+    #         inv_perm = torch.arange(len(perm), device=x.device)[torch.argsort(torch.tensor(perm))].tolist()
+    #         # --- 修正箇所はここまで ---
+
+    #         x = x.permute(*perm).contiguous()
+    #         shape = x.size()
+    #         values = x.reshape(x.size(0), 1, -1)
+
+    #         # Add noise or quantize
+    #         outputs = self.quantize(
+    #             values, "noise" if training else "dequantize", self._get_medians()
+    #         )
+            
+    #         # likelihoodの計算（torch.jit.is_scripting()の分岐を削除）
+    #         likelihood, _, _ = self._likelihood(outputs)
+    #         if self.use_likelihood_bound:
+    #             likelihood = self.likelihood_lower_bound(likelihood)
+
+    #         # Convert back to input tensor shape
+    #         outputs = outputs.reshape(shape)
+    #         outputs = outputs.permute(*inv_perm).contiguous()
+
+    #         likelihood = likelihood.reshape(shape)
+    #         likelihood = likelihood.permute(*inv_perm).contiguous()
+
+    #         return outputs, likelihood
+
     @staticmethod
     def _build_indexes(size):
         dims = len(size)
@@ -822,6 +865,9 @@ class GaussianMixtureConditional(GaussianConditional):
         )
 
         return (rv, abs_max, zero_bitmap), y_quantized
+        # in usual gaussian case, the return is the list of strings (usuall length is one)
+        # here, we return a tuple of (list of strings, abs_max, zero_bitmap)
+        # that makes the other components not compatible ...
 
     def decompress(self, strings, abs_max, zero_bitmap, scales, means, weights):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()

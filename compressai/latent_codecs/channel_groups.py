@@ -135,8 +135,8 @@ class ChannelGroupsLatentCodec(LatentCodec):
         side_params: Tensor,
         **kwargs,
     ) -> Dict[str, Any]:
-        n = len(strings[0])
-        assert all(len(ss) == n for ss in strings)
+        n = 1 #batch は非対応ということにする
+        #assert all(len(ss) == n for ss in strings)
         strings_per_group = len(strings) // len(self.groups)
 
         y_out_ = [{}] * len(self.groups)
