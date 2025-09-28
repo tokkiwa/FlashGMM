@@ -462,95 +462,95 @@ class EntropyBottleneck(EntropyModel):
         likelihood = torch.sigmoid(upper) - torch.sigmoid(lower)
         return likelihood, lower, upper
 
-    # def forward(
-    #     self, x: Tensor, training: Optional[bool] = None
-    # ) -> Tuple[Tensor, Tensor]:
-    #     if training is None:
-    #         training = self.training
-
-    #     if not torch.jit.is_scripting():
-    #         # x from B x C x ... to C x B x ...
-    #         perm = np.arange(len(x.shape))
-    #         perm[0], perm[1] = perm[1], perm[0]
-    #         # Compute inverse permutation
-    #         inv_perm = np.arange(len(x.shape))[np.argsort(perm)]
-    #     else:
-    #         raise NotImplementedError()
-    #         # TorchScript in 2D for static inference
-    #         # Convert to (channels, ... , batch) format
-    #         # perm = (1, 2, 3, 0)
-    #         # inv_perm = (3, 0, 1, 2)
-
-    #     x = x.permute(*perm).contiguous()
-    #     shape = x.size()
-    #     values = x.reshape(x.size(0), 1, -1)
-
-    #     # Add noise or quantize
-
-    #     outputs = self.quantize(
-    #         values, "noise" if training else "dequantize", self._get_medians()
-    #     )
-
-    #     if not torch.jit.is_scripting():
-    #         likelihood, _, _ = self._likelihood(outputs)
-    #         if self.use_likelihood_bound:
-    #             likelihood = self.likelihood_lower_bound(likelihood)
-    #     else:
-    #         raise NotImplementedError()
-    #         # TorchScript not yet supported
-    #         # likelihood = torch.zeros_like(outputs)
-
-    #     # Convert back to input tensor shape
-    #     outputs = outputs.reshape(shape)
-    #     outputs = outputs.permute(*inv_perm).contiguous()
-
-    #     likelihood = likelihood.reshape(shape)
-    #     likelihood = likelihood.permute(*inv_perm).contiguous()
-
-    #     return outputs, likelihood
-
     def forward(
-            self, x: Tensor, training: Optional[bool] = None
-        ) -> Tuple[Tensor, Tensor]:
-            if training is None:
-                training = self.training
+        self, x: Tensor, training: Optional[bool] = None
+    ) -> Tuple[Tensor, Tensor]:
+        if training is None:
+            training = self.training
 
-            # --- ここからが修正箇所 ---
-            # NumPyではなく、PyTorchの関数でpermとinv_permを計算する
+        if not torch.jit.is_scripting():
+            # x from B x C x ... to C x B x ...
+            perm = np.arange(len(x.shape))
+            perm[0], perm[1] = perm[1], perm[0]
+            # Compute inverse permutation
+            inv_perm = np.arange(len(x.shape))[np.argsort(perm)]
+        else:
+            raise NotImplementedError()
+            # TorchScript in 2D for static inference
+            # Convert to (channels, ... , batch) format
+            # perm = (1, 2, 3, 0)
+            # inv_perm = (3, 0, 1, 2)
 
-            # perm: 0番目と1番目の次元を入れ替える
-            # 例: 4次元なら (0, 1, 2, 3) -> (1, 0, 2, 3)
-            dims = list(range(x.dim()))
-            dims[0], dims[1] = dims[1], dims[0]
-            perm = tuple(dims)
+        x = x.permute(*perm).contiguous()
+        shape = x.size()
+        values = x.reshape(x.size(0), 1, -1)
 
-            # inv_perm: permの逆操作を計算する
-            # PyTorchのargsortを使って逆順列を求める
-            inv_perm = torch.arange(len(perm), device=x.device)[torch.argsort(torch.tensor(perm))].tolist()
-            # --- 修正箇所はここまで ---
+        # Add noise or quantize
 
-            x = x.permute(*perm).contiguous()
-            shape = x.size()
-            values = x.reshape(x.size(0), 1, -1)
+        outputs = self.quantize(
+            values, "noise" if training else "dequantize", self._get_medians()
+        )
 
-            # Add noise or quantize
-            outputs = self.quantize(
-                values, "noise" if training else "dequantize", self._get_medians()
-            )
-            
-            # likelihoodの計算（torch.jit.is_scripting()の分岐を削除）
+        if not torch.jit.is_scripting():
             likelihood, _, _ = self._likelihood(outputs)
             if self.use_likelihood_bound:
                 likelihood = self.likelihood_lower_bound(likelihood)
+        else:
+            raise NotImplementedError()
+            # TorchScript not yet supported
+            # likelihood = torch.zeros_like(outputs)
 
-            # Convert back to input tensor shape
-            outputs = outputs.reshape(shape)
-            outputs = outputs.permute(*inv_perm).contiguous()
+        # Convert back to input tensor shape
+        outputs = outputs.reshape(shape)
+        outputs = outputs.permute(*inv_perm).contiguous()
 
-            likelihood = likelihood.reshape(shape)
-            likelihood = likelihood.permute(*inv_perm).contiguous()
+        likelihood = likelihood.reshape(shape)
+        likelihood = likelihood.permute(*inv_perm).contiguous()
 
-            return outputs, likelihood
+        return outputs, likelihood
+
+    # def forward(
+    #         self, x: Tensor, training: Optional[bool] = None
+    #     ) -> Tuple[Tensor, Tensor]:
+    #         if training is None:
+    #             training = self.training
+
+    #         # --- ここからが修正箇所 ---
+    #         # NumPyではなく、PyTorchの関数でpermとinv_permを計算する
+
+    #         # perm: 0番目と1番目の次元を入れ替える
+    #         # 例: 4次元なら (0, 1, 2, 3) -> (1, 0, 2, 3)
+    #         dims = list(range(x.dim()))
+    #         dims[0], dims[1] = dims[1], dims[0]
+    #         perm = tuple(dims)
+
+    #         # inv_perm: permの逆操作を計算する
+    #         # PyTorchのargsortを使って逆順列を求める
+    #         inv_perm = torch.arange(len(perm), device=x.device)[torch.argsort(torch.tensor(perm))].tolist()
+    #         # --- 修正箇所はここまで ---
+
+    #         x = x.permute(*perm).contiguous()
+    #         shape = x.size()
+    #         values = x.reshape(x.size(0), 1, -1)
+
+    #         # Add noise or quantize
+    #         outputs = self.quantize(
+    #             values, "noise" if training else "dequantize", self._get_medians()
+    #         )
+            
+    #         # likelihoodの計算（torch.jit.is_scripting()の分岐を削除）
+    #         likelihood, _, _ = self._likelihood(outputs)
+    #         if self.use_likelihood_bound:
+    #             likelihood = self.likelihood_lower_bound(likelihood)
+
+    #         # Convert back to input tensor shape
+    #         outputs = outputs.reshape(shape)
+    #         outputs = outputs.permute(*inv_perm).contiguous()
+
+    #         likelihood = likelihood.reshape(shape)
+    #         likelihood = likelihood.permute(*inv_perm).contiguous()
+
+    #         return outputs, likelihood
 
     @staticmethod
     def _build_indexes(size):

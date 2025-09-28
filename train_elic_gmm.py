@@ -452,7 +452,7 @@ def parse_args(argv):
         "--N", type=int, default=128,
     )
     parser.add_argument(
-        "--K", type=int, default=3
+        "--K", type=int, default=4
     )
     parser.add_argument(
         "--lr_epoch", nargs='+', type=int
@@ -524,7 +524,7 @@ def main(argv):
     net = Elic2022GMM(N=args.N, K = args.K, quantizer = "noise")
     #net = Cheng2020AnchorCheckerboard(N = args.N)
     net = net.to(device)
-    net = torch.compile(net, dynamic=True)
+    #net = torch.compile(net, dynamic=True)
     #print(calculate_flops(net, (1, 3, 768, 512)))
     
 
