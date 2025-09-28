@@ -317,7 +317,6 @@ class CheckerboardLatentCodec(LatentCodec):
             y_ctx_i = self.unembed(self.context_prediction(self.embed(y_hat_)))[i]
             if i == 0:
                 y_ctx_i = self._mask(y_ctx_i, "all")
-            print(y_ctx_i.shape, side_params_[i].shape)
             params_i = self.entropy_parameters(self.merge(y_ctx_i, side_params_[i]))
             y_out = self.latent_codec["y"].decompress(
                 [y_strings_[i]], y_i_shape, params_i

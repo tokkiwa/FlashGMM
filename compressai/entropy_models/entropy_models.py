@@ -865,6 +865,9 @@ class GaussianMixtureConditional(GaussianConditional):
         )
 
         return (rv, abs_max, zero_bitmap), y_quantized
+        # in usual gaussian case, the return is the list of strings (usuall length is one)
+        # here, we return a tuple of (list of strings, abs_max, zero_bitmap)
+        # that makes the other components not compatible ...
 
     def decompress(self, strings, abs_max, zero_bitmap, scales, means, weights):
         nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
