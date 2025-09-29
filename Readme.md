@@ -13,9 +13,7 @@ Our paper is available at [arxiv](https://arxiv.org/abs/2509.18815). Please feel
 The Gaussian Mixture Model (GMM) by [Cheng et al. 2020](https://github.com/ZhengxueCheng/Learned-Image-Compression-with-GMM-and-Attention) is a powerful entropy model for learned image compression. However, the original implementation is computationally expensive, making it impractical for real-world applications.
 
 Our implementation accelerates the GMM-based entropy model by leveraging parallel computing capabilities of modern GPUs. We achieve this by (1) installing a new search-based algorithm, (2) numerical approximation of the cumulative distribution function (CDF), and (3) leveraging SIMD parallelism in CPU.
-<p align="center">
-  <img src="assets/speed.png" alt="speed" width="500">
-</p>
+![](assets/speed.png)
 
 Our impelmentation is **fully compatible** with the CompressAI's implementation. That is, you can apply FlashGMM to any models trained with CompressAI's GMM entropy model without any modifications.
 
