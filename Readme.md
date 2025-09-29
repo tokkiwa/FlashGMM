@@ -8,14 +8,32 @@ FlashGMM is a fast implementation of Gaussian Mixture Model (GMM) for image comp
 The codes are based on the [CompressAI](https://github.com/InterDigitalInc/CompressAI/) library. 
 
 Our paper is available at [arxiv](https://arxiv.org/abs/2509.18815). Please feel free to contact me (octachoron(at)suou.waseda.jp) or post an issue if you have any inquiries regarding to this work. 
+# Overview
+
+The Gaussian Mixture Model (GMM) by [Cheng et al. 2020](https://github.com/ZhengxueCheng/Learned-Image-Compression-with-GMM-and-Attention) is a powerful entropy model for learned image compression. However, the original implementation is computationally expensive, making it impractical for real-world applications.
+
+Our implementation accelerates the GMM-based entropy model by leveraging parallel computing capabilities of modern GPUs. We achieve this by (1) installing a new search-based algorithm, (2) numerical approximation of the cumulative distribution function (CDF), and (3) leveraging SIMD parallelism in CPU.
+<p align="center">
+  <img src="assets/speed.png" alt="speed" width="500">
+</p>
+
+Our impelmentation is **fully compatible** with the CompressAI's implementation. That is, you can apply FlashGMM to any models trained with CompressAI's GMM entropy model without any modifications.
+
+We currently support the following models:
+- Cheng2020AnchorCheckerboardGMMv2 (He et al. CVPR 2021) [[weights](https://github.com/tokkiwa/FlashGMM/releases/tag/weight-release)]
+- ELIC2022GMM (He et al. CVPR 2022)
+
+
+
+
 
 # Installation
-We tested FlashGMM on Python 3.10, Pytorch 2.2.2, CUDA 12.1 and GCC 11.4.0. 
+We tested FlashGMM on Python 3.10, Pytorch 2.2.2, CUDA 12.1 and GCC 11.4.0. We recommend using Docker container [pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel](https://hub.docker.com/layers/pytorch/pytorch/2.2.2-cuda12.1-cudnn8-devel/images/sha256:b2bbeac616a0adddb3479269b8106c05ea9cdfcbc62a738105f31f8fd5da5138) for easy setup.
 
 First, clone the repository and install the required packages:
 
 ```bash
-git clone *the repository URL*
+git clone https://github.com/tokkiwa/FlashGMM.git
 cd FlashGMM
 pip install -r requirements.txt
 ```
@@ -23,7 +41,7 @@ pip install -r requirements.txt
 To compile the C++ extensions, run:
 
 ```bash
-python setup.py develop
+python setup.py install
 ```
 
 # Usage
@@ -38,14 +56,16 @@ python3 train_ckbd_gmm.py --cuda -d /path/to/dataset
     --kodak_path /path/to/kodak
 ```
 
-The pre-trained weights will be available soon. 
-
 For evaluation, run
 
 ```bash
 python3 eval.py --data /path/to/kodak --cuda \
 --checkpoint /path/to/checkpoint --real\
 ```
+
+You can set environment variable `APPROX_MODE` and `USE_SIMD` to control the behavior of FlashGMM. `APPROX_MODE` can be set to `0`, `1`, or `2` to choose the approximation method. `0`(default) corresponds to Polya's approximation, `1` to logistic approximation, and `2` to A&S approximation.
+
+`USE_SIMD` can be set to `0` or `1` to disable or enable SIMD acceleration. It is enabled by default.
 
 The following is the original Readme of CompressAI:
 
